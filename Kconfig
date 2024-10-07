@@ -1,0 +1,5 @@
+# nrfadk-hello_codec
+
+rsource "src/drivers/Kconfig"
+
+source "Kconfig.zephyr"
