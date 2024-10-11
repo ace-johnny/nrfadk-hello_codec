@@ -72,17 +72,21 @@ static int16_t sine750_48k_16b_1c[] =
 /**
  * @brief       Initialize the I2S peripheral using direct NRF registers.
  * 
+ * @details     MCKFREQ is only valid when BYPASS is disabled, else MCK = ACLK.
+ *              This also affects RATIO which determines sample rate, aka LRCK.
+ * 
  * @todo        Rewrite using Nordic's nrfx I2S? Or Zephyr's built-in I2S?
  *              Using registers requires DPPI and EasyDMA for buffer updates?
  * 
  */
 static int nrfadk_i2s_reg_init(void)
 {
-	// ACLK 12.288MHz (bypass div), MCLK enabled, LRCLK 48kHz, BCLK 1.536MHz
-	NRF_I2S0->CONFIG.CLKCONFIG = (I2S_CONFIG_CLKCONFIG_BYPASS_Enable << I2S_CONFIG_CLKCONFIG_BYPASS_Pos) |
+	// ACLK 12.288MHz, MCK 6.144MHz, LRCK 48kHz (MCK / RATIO), SCK 1.536MHz
+	NRF_I2S0->CONFIG.CLKCONFIG = (I2S_CONFIG_CLKCONFIG_BYPASS_Disable << I2S_CONFIG_CLKCONFIG_BYPASS_Pos) |
 	                             (I2S_CONFIG_CLKCONFIG_CLKSRC_ACLK << I2S_CONFIG_CLKCONFIG_CLKSRC_Pos);
 	NRF_I2S0->CONFIG.MCKEN =     (I2S_CONFIG_MCKEN_MCKEN_Enabled << I2S_CONFIG_MCKEN_MCKEN_Pos);
-	NRF_I2S0->CONFIG.RATIO =     (I2S_CONFIG_RATIO_RATIO_256X << I2S_CONFIG_RATIO_RATIO_Pos);
+	NRF_I2S0->CONFIG.MCKFREQ =   0x66666000;  // 6,144,000 Hz
+	NRF_I2S0->CONFIG.RATIO =     (I2S_CONFIG_RATIO_RATIO_128X << I2S_CONFIG_RATIO_RATIO_Pos);
 
 	// Master mode, I2S format, Left align, 16bit samples, Left mono
 	NRF_I2S0->CONFIG.MODE =      (I2S_CONFIG_MODE_MODE_Master << I2S_CONFIG_MODE_MODE_Pos);
@@ -102,7 +106,7 @@ static int nrfadk_i2s_reg_init(void)
 	NRF_I2S0->TXD.PTR =          (uint32_t)&sine750_48k_16b_1c[0];
 	NRF_I2S0->RXTXD.MAXCNT =     (sizeof(sine750_48k_16b_1c)) / (sizeof(uint32_t));
 
-	// Start MCLK and playback
+	// Start MCK and playback
 	NRF_I2S0->TASKS_START =      (1 << I2S_TASKS_START_TASKS_START_Pos);
 
 	return 0;
@@ -208,16 +212,16 @@ static int nrfadk_hwcodec_config(const uint32_t config[][2], uint32_t length)
 /**
  * @brief       Initialize the CS47L63, start clocks, and configure subsystems.
  * 
- * @details     MCLK1 =  12,288,000 Hz  (I2S_CLKSRC.ACLK)
- *              LRCLK =      48,000 Hz  (MCLK1 / I2S_CONFIG.RATIO)
- *              BCLK =    1,536,000 Hz  (LRCLK * I2S_CONFIG.SWIDTH * 2)
- *              FLL1 =   49,152,000 Hz  (MCLK1 * 4)
+ * @details     MCLK1 =   6,144,000 Hz  (aka MCK = I2S_CONFIG.MCKFREQ)
+ *              FSYNC =      48,000 Hz  (aka LRCK = MCK / I2S_CONFIG.RATIO)
+ *              BCLK =    1,536,000 Hz  (aka SCK = LRCK * I2S_CONFIG.SWIDTH * 2)
+ *              FLL1 =   49,152,000 Hz  (MCLK1 * 8)
  *              SYSCLK = 98,304,000 Hz  (FLL1 * 2)
  * 
  * @retval      `CS47L63_STATUS_OK`     The operation was successful.
  * @retval      `CS47L63_STATUS_FAIL`   Initializing the CS47L63 failed.
  * 
- * @warning     I2S MCLK must already be running before calling this function.
+ * @warning     I2S MCK must already be running before calling this function.
  * 
  */
 static int nrfadk_hwcodec_init(void)
@@ -229,7 +233,7 @@ static int nrfadk_hwcodec_init(void)
 
 	// Start FLL1 and SYSCLK
 	ret += cs47l63_fll_config(&cs47l63_driver, CS47L63_FLL1,
-	                          CS47L63_FLL_SRC_MCLK1, 12288000, 49152000);
+	                          CS47L63_FLL_SRC_MCLK1, 6144000, 49152000);
 
 	ret += cs47l63_fll_enable(&cs47l63_driver, CS47L63_FLL1);
 
