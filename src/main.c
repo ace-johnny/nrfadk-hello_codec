@@ -1,7 +1,7 @@
 /**
  * @file        main.c
  * 
- * @brief       Audio DK CS47L63 test using I2S loop and tone/noise generators.
+ * @brief       Audio DK HW_CODEC test using I2S loop and tone/noise generators.
  */
 
 #include <zephyr/kernel.h>
@@ -13,39 +13,36 @@
 
 
 ////////////////////////////////////////////////////////////////////////////////
-// NRFX CLOCKS
+// NRFX_CLOCKS
 
-#define HFCLKAUDIO_12288000 0x9BA6
+#define HFCLKAUDIO_12_288_MHZ 0x9BA6
+
 
 /**
  * @brief       Initialize the high-frequency clocks and wait for each to start.
  * 
  * @details     HFCLK =         128,000,000 Hz
  *              HFCLKAUDIO =     12,288,000 Hz
- * 
  */
 static int nrfadk_hfclocks_init(void)
 {
 	nrfx_err_t err;
 
+
 	// HFCLK
 	err = nrfx_clock_divider_set(NRF_CLOCK_DOMAIN_HFCLK, NRF_CLOCK_HFCLK_DIV_1);
-	if (err != NRFX_SUCCESS) {
-		return (err - NRFX_ERROR_BASE_NUM);
-	}
+	if (err != NRFX_SUCCESS) return (err - NRFX_ERROR_BASE_NUM);
 
 	nrfx_clock_start(NRF_CLOCK_DOMAIN_HFCLK);
-	while (!nrfx_clock_is_running(NRF_CLOCK_DOMAIN_HFCLK, NULL)) {
-		k_msleep(1);
-	}
+	while (!nrfx_clock_is_running(NRF_CLOCK_DOMAIN_HFCLK, NULL)) k_msleep(1);
+
 
 	// HFCLKAUDIO
-	nrfx_clock_hfclkaudio_config_set(HFCLKAUDIO_12288000);
+	nrfx_clock_hfclkaudio_config_set(HFCLKAUDIO_12_288_MHZ);
 
 	nrfx_clock_start(NRF_CLOCK_DOMAIN_HFCLKAUDIO);
-	while (!nrfx_clock_is_running(NRF_CLOCK_DOMAIN_HFCLKAUDIO, NULL)) {
-		k_msleep(1);
-	}
+	while (!nrfx_clock_is_running(NRF_CLOCK_DOMAIN_HFCLKAUDIO, NULL)) k_msleep(1);
+
 
 	return 0;
 }
@@ -53,10 +50,13 @@ static int nrfadk_hfclocks_init(void)
 
 
 ////////////////////////////////////////////////////////////////////////////////
-// NRF I2S
+// NRF_I2S
 
-/** Audio 750Hz sine wave. */
-static int16_t sine750_48k_16b_1c[] =
+#define MCKFREQ_6_144_MHZ 0x66666000
+
+
+/** I2S TX buffer. */
+static int16_t sine750_48k_16b_1c[64] =
 {
 	  3211,   6392,   9511,  12539,  15446,  18204,  20787,  23169,
 	 25329,  27244,  28897,  30272,  31356,  32137,  32609,  32767,
@@ -70,44 +70,28 @@ static int16_t sine750_48k_16b_1c[] =
 
 
 /**
- * @brief       Initialize the I2S peripheral using direct NRF registers.
+ * @brief       Initialize and start the I2S peripheral using NRF registers.
  * 
- * @details     MCKFREQ is only valid when BYPASS is disabled, else MCK = ACLK.
- *              This also affects RATIO which determines sample rate, aka LRCK.
- * 
- * @todo        Rewrite using Nordic's nrfx I2S? Or Zephyr's built-in I2S?
- *              Using registers requires DPPI and EasyDMA for buffer updates?
- * 
+ * @details     I2S master, 48kHz 16bit, Left mono, TX only.
  */
 static int nrfadk_i2s_reg_init(void)
 {
-	// ACLK 12.288MHz, MCK 6.144MHz, LRCK 48kHz (MCK / RATIO), SCK 1.536MHz
-	NRF_I2S0->CONFIG.CLKCONFIG = (I2S_CONFIG_CLKCONFIG_BYPASS_Disable << I2S_CONFIG_CLKCONFIG_BYPASS_Pos) |
-	                             (I2S_CONFIG_CLKCONFIG_CLKSRC_ACLK << I2S_CONFIG_CLKCONFIG_CLKSRC_Pos);
-	NRF_I2S0->CONFIG.MCKEN =     (I2S_CONFIG_MCKEN_MCKEN_Enabled << I2S_CONFIG_MCKEN_MCKEN_Pos);
-	NRF_I2S0->CONFIG.MCKFREQ =   0x66666000;  // 6,144,000 Hz
-	NRF_I2S0->CONFIG.RATIO =     (I2S_CONFIG_RATIO_RATIO_128X << I2S_CONFIG_RATIO_RATIO_Pos);
+	// Configure and enable
+	NRF_I2S0->CONFIG.CLKCONFIG =    I2S_CONFIG_CLKCONFIG_CLKSRC_ACLK;
+	NRF_I2S0->CONFIG.MCKFREQ =      MCKFREQ_6_144_MHZ;
+	NRF_I2S0->CONFIG.RATIO =        I2S_CONFIG_RATIO_RATIO_128X;
+	NRF_I2S0->CONFIG.CHANNELS =     I2S_CONFIG_CHANNELS_CHANNELS_Left;
+	NRF_I2S0->CONFIG.TXEN =         I2S_CONFIG_TXEN_TXEN_Enabled;
 
-	// Master mode, I2S format, Left align, 16bit samples, Left mono
-	NRF_I2S0->CONFIG.MODE =      (I2S_CONFIG_MODE_MODE_Master << I2S_CONFIG_MODE_MODE_Pos);
-	NRF_I2S0->CONFIG.FORMAT =    (I2S_CONFIG_FORMAT_FORMAT_I2S << I2S_CONFIG_FORMAT_FORMAT_Pos);
-	NRF_I2S0->CONFIG.ALIGN =     (I2S_CONFIG_ALIGN_ALIGN_Left << I2S_CONFIG_ALIGN_ALIGN_Pos);
-	NRF_I2S0->CONFIG.SWIDTH =    (I2S_CONFIG_SWIDTH_SWIDTH_16Bit << I2S_CONFIG_SWIDTH_SWIDTH_Pos);
-	NRF_I2S0->CONFIG.CHANNELS =  (I2S_CONFIG_CHANNELS_CHANNELS_Left << I2S_CONFIG_CHANNELS_CHANNELS_Pos);
+	NRF_I2S0->ENABLE =              I2S_ENABLE_ENABLE_Enabled;
 
-	// TX enabled, RX disabled
-	NRF_I2S0->CONFIG.TXEN =      (I2S_CONFIG_TXEN_TXEN_Enabled << I2S_CONFIG_TXEN_TXEN_Pos);
-	NRF_I2S0->CONFIG.RXEN =      (I2S_CONFIG_RXEN_RXEN_Disabled << I2S_CONFIG_RXEN_RXEN_Pos);
 
-	// I2S enabled
-	NRF_I2S0->ENABLE =           (I2S_ENABLE_ENABLE_Enabled << I2S_ENABLE_ENABLE_Pos);
+	// Start TX buffer
+	NRF_I2S0->TXD.PTR =             (uint32_t)&sine750_48k_16b_1c[0];
+	NRF_I2S0->RXTXD.MAXCNT =        (sizeof(sine750_48k_16b_1c)) / (sizeof(uint32_t));
 
-	// Data buffer
-	NRF_I2S0->TXD.PTR =          (uint32_t)&sine750_48k_16b_1c[0];
-	NRF_I2S0->RXTXD.MAXCNT =     (sizeof(sine750_48k_16b_1c)) / (sizeof(uint32_t));
+	NRF_I2S0->TASKS_START =         I2S_TASKS_START_TASKS_START_Trigger;
 
-	// Start MCK and playback
-	NRF_I2S0->TASKS_START =      (1 << I2S_TASKS_START_TASKS_START_Pos);
 
 	return 0;
 }
@@ -115,7 +99,7 @@ static int nrfadk_i2s_reg_init(void)
 
 
 ////////////////////////////////////////////////////////////////////////////////
-// HW CODEC
+// HW_CODEC
 
 /** CS47L63 driver state handle. */
 static cs47l63_t cs47l63_driver;
@@ -128,15 +112,9 @@ static const uint32_t cs47l63_cfg[][2] =
 	// Audio Serial Port 1 (I2S slave, 48kHz 16bit, Left mono, RX only)
 
 	{ CS47L63_ASP1_CONTROL2,
-		(0x10 << CS47L63_ASP1_RX_WIDTH_SHIFT) |         // 16bit
-		(0x10 << CS47L63_ASP1_TX_WIDTH_SHIFT) |         // 16bit
-		(0b010 << CS47L63_ASP1_FMT_SHIFT)     |         // I2S
-		(0 << CS47L63_ASP1_BCLK_INV_SHIFT)    |         // Normal
-		(0 << CS47L63_ASP1_BCLK_FRC_SHIFT)    |         // Disabled
-		(0 << CS47L63_ASP1_BCLK_MSTR_SHIFT)   |         // Slave
-		(0 << CS47L63_ASP1_FSYNC_INV_SHIFT)   |         // Normal
-		(0 << CS47L63_ASP1_FSYNC_FRC_SHIFT)   |         // Disabled
-		(0 << CS47L63_ASP1_FSYNC_MSTR_SHIFT)            // Slave
+		(0x10  << CS47L63_ASP1_RX_WIDTH_SHIFT) |        // 16bit
+		(0x10  << CS47L63_ASP1_TX_WIDTH_SHIFT) |        // 16bit
+		(0b010 << CS47L63_ASP1_FMT_SHIFT)               // I2S
 	},
 	{ CS47L63_ASP1_CONTROL3,
 		(0b00 << CS47L63_ASP1_DOUT_HIZ_CTRL_SHIFT)      // Always 0
@@ -152,7 +130,7 @@ static const uint32_t cs47l63_cfg[][2] =
 	// Noise Generator (increased GAIN from -114dB to 0dB)
 
 	{ CS47L63_COMFORT_NOISE_GENERATOR,
-		(0 << CS47L63_NOISE_GEN_EN_SHIFT) |             // Disabled
+		(0    << CS47L63_NOISE_GEN_EN_SHIFT) |          // Disabled
 		(0x13 << CS47L63_NOISE_GEN_GAIN_SHIFT)          // 0dB
 	},
 
@@ -160,20 +138,20 @@ static const uint32_t cs47l63_cfg[][2] =
 	// Output 1 Left (reduced MIX_VOLs to prevent clipping summed signals)
 
 	{ CS47L63_OUT1L_INPUT1,
-		(0x2B << CS47L63_OUT1LMIX_VOL1_SHIFT) |         // -21dB
-		(0x20 << CS47L63_OUT1L_SRC1_SHIFT)              // ASP1_RX1
+		(0x2E  << CS47L63_OUT1LMIX_VOL1_SHIFT) |        // -18dB
+		(0x020 << CS47L63_OUT1L_SRC1_SHIFT)             // ASP1_RX1
 	},
 	{ CS47L63_OUT1L_INPUT2,
-		(0x2B << CS47L63_OUT1LMIX_VOL2_SHIFT) |         // -21dB
-		(0x21 << CS47L63_OUT1L_SRC2_SHIFT)              // ASP1_RX2
+		(0x40  << CS47L63_OUT1LMIX_VOL2_SHIFT) |        // 0dB
+		(0x000 << CS47L63_OUT1L_SRC2_SHIFT)             // NO_INPUT
 	},
-	{ CS47L63_OUT1L_INPUT3,         
-		(0x2B << CS47L63_OUT1LMIX_VOL3_SHIFT) |         // -21dB
-		(0x0c << CS47L63_OUT1L_SRC3_SHIFT)              // TONE1_GEN
+	{ CS47L63_OUT1L_INPUT3,
+		(0x2B  << CS47L63_OUT1LMIX_VOL3_SHIFT) |        // -21dB
+		(0x004 << CS47L63_OUT1L_SRC3_SHIFT)             // TONE1_GEN
 	},
 	{ CS47L63_OUT1L_INPUT4,
-		(0x2B << CS47L63_OUT1LMIX_VOL4_SHIFT) |         // -21dB
-		(0x04 << CS47L63_OUT1L_SRC4_SHIFT)              // NOISE_GEN
+		(0x28  << CS47L63_OUT1LMIX_VOL4_SHIFT) |        // -24dB
+		(0x00C << CS47L63_OUT1L_SRC4_SHIFT)             // NOISE_GEN
 	},
 	{ CS47L63_OUTPUT_ENABLE_1,
 		(1 << CS47L63_OUT1L_EN_SHIFT)                   // Enabled
@@ -184,12 +162,11 @@ static const uint32_t cs47l63_cfg[][2] =
 /**
  * @brief       Write a configuration array to multiple CS47L63 registers.
  * 
- * @param[in]   config: Array containing address/value pairs.
- * @param[in]   length: Total number of registers to write.
+ * @param[in]   config: Array of address/data pairs.
+ * @param[in]   length: Number of registers to write.
  * 
  * @retval      `CS47L63_STATUS_OK`     The operation was successful.
  * @retval      `CS47L63_STATUS_FAIL`   Writing to the control port failed.
- * 
  */
 static int nrfadk_hwcodec_config(const uint32_t config[][2], uint32_t length)
 {
@@ -197,7 +174,8 @@ static int nrfadk_hwcodec_config(const uint32_t config[][2], uint32_t length)
 	uint32_t addr;
 	uint32_t data;
 
-	for (int i = 0; i < length; i++) {
+	for (int i = 0; i < length; i++)
+	{
 		addr = config[i][0];
 		data = config[i][1];
 
@@ -212,24 +190,25 @@ static int nrfadk_hwcodec_config(const uint32_t config[][2], uint32_t length)
 /**
  * @brief       Initialize the CS47L63, start clocks, and configure subsystems.
  * 
- * @details     MCLK1 =   6,144,000 Hz  (aka MCK = I2S_CONFIG.MCKFREQ)
- *              FSYNC =      48,000 Hz  (aka LRCK = MCK / I2S_CONFIG.RATIO)
- *              BCLK =    1,536,000 Hz  (aka SCK = LRCK * I2S_CONFIG.SWIDTH * 2)
+ * @details     MCLK1 =   6,144,000 Hz  (I2S MCK = CONFIG.MCKFREQ)
+ *              FSYNC =      48,000 Hz  (I2S LRCK = MCK / CONFIG.RATIO)
+ *              BCLK =    1,536,000 Hz  (I2S SCK = LRCK * CONFIG.SWIDTH * 2)
  *              FLL1 =   49,152,000 Hz  (MCLK1 * 8)
  *              SYSCLK = 98,304,000 Hz  (FLL1 * 2)
  * 
  * @retval      `CS47L63_STATUS_OK`     The operation was successful.
  * @retval      `CS47L63_STATUS_FAIL`   Initializing the CS47L63 failed.
  * 
- * @warning     I2S MCK must already be running before calling this function.
- * 
+ * @note        I2S MCK must already be running before calling this function.
  */
 static int nrfadk_hwcodec_init(void)
 {
 	int ret = CS47L63_STATUS_OK;
 
+
 	// Initialize driver
 	ret += cs47l63_comm_init(&cs47l63_driver);
+
 
 	// Start FLL1 and SYSCLK
 	ret += cs47l63_fll_config(&cs47l63_driver, CS47L63_FLL1,
@@ -242,8 +221,10 @@ static int nrfadk_hwcodec_init(void)
 	ret += cs47l63_update_reg(&cs47l63_driver, CS47L63_SYSTEM_CLOCK1,
 	                          CS47L63_SYSCLK_EN_MASK, CS47L63_SYSCLK_EN);
 
+
 	// Configure subsystems
 	ret += nrfadk_hwcodec_config(cs47l63_cfg, ARRAY_SIZE(cs47l63_cfg));
+
 
 	return ret;
 }
@@ -264,12 +245,13 @@ int main(void)
 		printk("\nError initializing Audio DK\n");
 		return -1;
 	}
-	printk("\nAudio DK initialzed\n");
-	k_msleep(2000);
+
+	printk("\nAudio DK initialized\n");
+	k_msleep(1250);
 
 
 
-	// Unmute OUT1L and play TONE1/NOISE generators mixed with I2S playback
+	// Unmute OUT1L I2S playback and enable NOISE/TONE1 generators
 
 	cs47l63_update_reg(&cs47l63_driver, CS47L63_OUT1L_VOLUME_1,
 	                   CS47L63_OUT_VU_MASK | CS47L63_OUT1L_MUTE_MASK,
@@ -282,7 +264,7 @@ int main(void)
 	cs47l63_update_reg(&cs47l63_driver, CS47L63_COMFORT_NOISE_GENERATOR,
 	                   CS47L63_NOISE_GEN_EN_MASK, CS47L63_NOISE_GEN_EN);
 
-	printk("\nNOISE enabled\n");
+	printk("NOISE enabled\n");
 	k_msleep(3000);
 
 
@@ -292,6 +274,9 @@ int main(void)
 	printk("TONE1 enabled\n");
 	k_msleep(3000);
 
+
+
+	// Disable NOISE/TONE1 generators and mute OUT1L I2S playback
 
 	cs47l63_update_reg(&cs47l63_driver, CS47L63_COMFORT_NOISE_GENERATOR,
 	                   CS47L63_NOISE_GEN_EN_MASK, 0);
@@ -311,8 +296,8 @@ int main(void)
 	                   CS47L63_OUT_VU_MASK | CS47L63_OUT1L_MUTE_MASK,
 	                   CS47L63_OUT_VU | CS47L63_OUT1L_MUTE);
 
-	printk("\nOUT1L muted\n");
-	k_msleep(2000);
+	printk("OUT1L muted\n");
+	k_msleep(1250);
 
 
 
@@ -321,36 +306,36 @@ int main(void)
 	cs47l63_update_reg(&cs47l63_driver, CS47L63_OUTPUT_ENABLE_1,
 	                   CS47L63_OUT1L_EN_MASK, 0);
 	printk("\nOUT1L disabled\n");
-	k_msleep(500);
+	k_msleep(250);
 
 	cs47l63_update_reg(&cs47l63_driver, CS47L63_SYSTEM_CLOCK1,
 	                   CS47L63_SYSCLK_EN_MASK, 0);
 	printk("SYSCLK disabled\n");
-	k_msleep(500);
+	k_msleep(250);
 
 	cs47l63_fll_disable(&cs47l63_driver, CS47L63_FLL1);
 	printk("FLL1 disabled\n");
-	k_msleep(500);
+	k_msleep(250);
 
-	NRF_I2S0->TASKS_STOP = (1 << I2S_TASKS_STOP_TASKS_STOP_Pos);
-	NRF_I2S0->ENABLE = (I2S_ENABLE_ENABLE_Disabled << I2S_ENABLE_ENABLE_Pos);
+	NRF_I2S0->TASKS_STOP =  I2S_TASKS_STOP_TASKS_STOP_Trigger;
+	NRF_I2S0->ENABLE =      I2S_ENABLE_ENABLE_Disabled;
 	printk("I2S disabled\n");
-	k_msleep(500);
+	k_msleep(250);
 
 	nrfx_clock_stop(NRF_CLOCK_DOMAIN_HFCLKAUDIO);
 	while (nrfx_clock_is_running(NRF_CLOCK_DOMAIN_HFCLKAUDIO, NULL)) k_msleep(1);
 	printk("HFCLKAUDIO stopped\n");
-	k_msleep(500);
+	k_msleep(250);
 
 	nrfx_clock_stop(NRF_CLOCK_DOMAIN_HFCLK);
 	while (nrfx_clock_is_running(NRF_CLOCK_DOMAIN_HFCLK, NULL)) k_msleep(1);
 	printk("HFCLK stopped\n");
-	k_msleep(500);
-
+	k_msleep(250);
 
 
 	printk("\nAudio DK shutdown\n\n");
 	k_msleep(100);
+
 
 	return 0;
 }
