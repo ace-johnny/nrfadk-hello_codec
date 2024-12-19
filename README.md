@@ -1,6 +1,6 @@
 # nRF5340 Audio DK - Hello Codec
 
-This example is the bare minimum project needed to initialize, configure, and enable the CS47L63 hardware codec. It plays a sine wave sample using the I2S TX buffer, and then briefly mixes in the codec's noise and tone generators as well.
+This example is the bare minimum project needed to initialize, configure, and enable the CS47L63 hardware codec. It plays a sine wave using the I2S TX buffer, and then briefly mixes in the codec's noise and tone generators as well.
 
 This code is liberally commented so it should be easy to understand, and it uses legible constants instead of indecipherable hex whenever possible to help self-document the written register values, simplifying experimentation with other available codec features not included in this trivial demo.
 
